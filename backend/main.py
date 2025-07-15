@@ -8,7 +8,8 @@ from uvicorn import Server
 from uvicorn.config import Config
 from dotenv import load_dotenv
 from pve_manager import PVEManager
-from dingtalk_handler import run_robot
+from dingtalk_handler import run_robot, setup_logger
+setup_logger()
 # 加载环境变量
 load_dotenv()
 

@@ -1,6 +1,4 @@
 # !/usr/bin/env python
-
-import argparse
 import logging,os
 from dingtalk_stream import AckMessage
 import dingtalk_stream
@@ -28,14 +26,25 @@ class CalcBotHandler(dingtalk_stream.ChatbotHandler):
         # except Exception as e:
         #     result = 'Error: %s' % e
         # self.logger.info('%s = %s' % (expression, result))
-        all_status={}
-        for pve_node in pve.pve_nodes:
-            _, result,_ = pve.get_gpu_status(pve_node)
-            all_status[pve_node] = result
-
-        self.reply_text(generate_dingtalk_message(all_status),incoming_message)
-
-        return AckMessage.STATUS_OK, 'OK'
+        self.logger.info(f'收到消息：{expression}')
+        match expression:
+            case "":
+                all_status={}
+                for pve_node in pve.pve_nodes:
+                    ok, result,_ = pve.get_gpu_status(pve_node)
+                    if ok:
+                        all_status[pve_node] = result
+                    else:
+                        self.reply_text(result,incoming_message)
+                        return AckMessage.STATUS_OK, 'OK'
+                self.reply_text(generate_dingtalk_message(all_status),incoming_message)
+                return AckMessage.STATUS_OK, 'OK'
+            case "help"|_:
+                self.reply_text("""支持命令：
+                1. 空消息：获取所有服务器GPU使用情况
+                2. help：获取帮助信息
+                """,incoming_message)
+                return AckMessage.STATUS_OK, 'OK'
 
 def run_robot():
     logger = setup_logger()
@@ -106,6 +115,7 @@ def generate_dingtalk_message(data, total_gpus_per_node=4):
     message += f"💡 剩余GPU: {total_free}张\n"
     message += f"📈 GPU总使用率: {overall_usage:.1f}%\n"
     message += f"{TITLE_SEP}\n"
+    message += f"⚙️ 发送Help获取更多使用介绍"
     
     return message
 if __name__ == '__main__':

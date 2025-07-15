@@ -9,10 +9,36 @@ load_dotenv()
 
 class PVEManager:
     def __init__(self):
+        import logging
+        self.logger = logging.getLogger(__name__)
         self.pve_nodes = os.getenv('PVE_NODES', 'pve1,pve2,pve3,pve4').split(',')
         self.pve_user = os.getenv('PVE_USER')
         self.pve_password = os.getenv('PVE_PASSWORD')
         self.connections: Dict[str, ProxmoxAPI] = self._init_connections()
+
+    def _is_connection_valid(self, conn):
+        """检查连接是否有效"""
+        try:
+            # 执行简单的API调用验证连接
+            conn.nodes.get()
+            return True
+        except Exception as e:
+            self.logger.warning(f"PVE连接验证失败: {str(e)}")
+            return False
+
+    def _reconnect_node(self, node_name):
+        """重新连接单个PVE节点"""
+        try:
+            self.logger.info(f"尝试重新连接PVE节点: {node_name}")
+            conn = ProxmoxAPI(node_name, user=self.pve_user, password=self.pve_password, port=8006, verify_ssl=False)
+            self.connections[node_name] = conn
+            self.logger.info(f"PVE节点 {node_name} 重新连接成功")
+            return True
+        except Exception as e:
+            self.logger.error(f"PVE节点 {node_name} 重新连接失败: {str(e)}")
+            if node_name in self.connections:
+                del self.connections[node_name]
+            return False
 
     def _init_connections(self) -> Dict[str, ProxmoxAPI]:
         """初始化所有PVE节点的连接"""
@@ -58,43 +84,70 @@ class PVEManager:
 
     def get_gpu_status(self, pve_name):
         """获取节点GPU使用情况（统计使用中的GPU数量）"""
-        if pve_name not in self.connections:
-            return False, f"PVE节点 {pve_name} 未连接"
+        self.logger.info(f"开始获取节点 {pve_name} 的GPU状态")
+        # 检查连接是否存在且有效
+        if pve_name not in self.connections or not self._is_connection_valid(self.connections[pve_name]):
+            self.logger.warning(f"PVE节点 {pve_name} 连接不存在或已失效")
+            # 尝试重新连接
+            if not self._reconnect_node(pve_name):
+                self.logger.error(f"PVE节点 {pve_name} 重新连接失败")
+                return False, f"PVE节点 {pve_name} 无法连接", 0
 
         try:
             conn = self.connections[pve_name]
             nodeStatus=[]
             # 获取所有虚拟机
-            for node in conn.nodes.get():
+            self.logger.info(f"成功连接到PVE节点 {pve_name}")
+            nodes = conn.nodes.get()
+            self.logger.info(f"获取到 {len(nodes)} 个节点信息")
+            
+            for node in nodes:
                 node_name = node['node']
-                nodeConn=conn.nodes(node_name)
+                self.logger.info(f"处理节点: {node_name}")
+                nodeConn = conn.nodes(node_name)
+                
+                # 获取节点上的所有VM
                 vms = nodeConn.qemu.get()
+                self.logger.info(f"节点 {node_name} 上发现 {len(vms)} 个虚拟机")
                 used_gpu_count = 0
-                pciList=nodeConn.hardware.pci.get()
+                
                 for vm in vms:
                     vm_used_gpu_count = 0
                     vmid = vm['vmid']
+                    vm_name = vm['name']
+                    self.logger.debug(f"检查虚拟机: {vmid} ({vm_name})")
+                    
                     # 获取虚拟机状态
-                    status = nodeConn.qemu(vmid).status.current.get()
-                    if status['status'] != 'running':
+                    try:
+                        status = nodeConn.qemu(vmid).status.current.get()
+                        self.logger.debug(f"虚拟机 {vmid} 状态: {status['status']}")
+                        
+                        if status['status'] != 'running':
+                            continue
+                        
+                        # 获取虚拟机配置
+                        config = nodeConn.qemu(vmid).config.get()
+                        pciList = []
+                        vmStatus = {'vm_name': vm_name}
+                        
+                        for key, v in config.items():
+                            if key.startswith('hostpci'):
+                                pciList.append(v)
+                                used_gpu_count += 1
+                                vm_used_gpu_count += 1
+                        
+                        vmStatus['pci_list'] = pciList
+                        vmStatus['vm_used_gpu_count'] = vm_used_gpu_count
+                        
+                        if pciList:
+                            nodeStatus.append(vmStatus)
+                            self.logger.info(f"虚拟机 {vmid} ({vm_name}) 使用 {vm_used_gpu_count} 个GPU: {pciList}")
+                    except Exception as vm_e:
+                        self.logger.error(f"处理虚拟机 {vmid} 时出错: {str(vm_e)}", exc_info=True)
                         continue
-                    #  conn.nodes(node_name).pci
-                    # 获取虚拟机配置
-                    config = nodeConn.qemu(vmid).config.get()
-                    # 检查是否有PCI直通设备（GPU）
-                    pciList=[]
-                    vmStatus={}
-                    for key, v in config.items():
-                        if key.startswith('hostpci'): 
-                            pciList.append(v)
-                            used_gpu_count += 1
-                            vm_used_gpu_count += 1
-                    vmStatus['vm_name']=vm['name']
-                    vmStatus['pci_list']=pciList
-                    vmStatus['vm_used_gpu_count']=vm_used_gpu_count
-                    if len(pciList) != 0:
-                        nodeStatus.append(vmStatus)
-                
-            return True, nodeStatus,used_gpu_count
+            
+            self.logger.info(f"节点 {pve_name} GPU状态获取成功，共发现 {used_gpu_count} 个已使用GPU")
+            return True, nodeStatus, used_gpu_count
         except Exception as e:
-            return False, f"获取GPU状态失败: {str(e)}"
+            self.logger.error(f"获取GPU状态失败: {str(e)}", exc_info=True)
+            return False, f"获取GPU状态失败: {str(e)}", 0
