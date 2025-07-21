@@ -37,13 +37,22 @@ class CalcBotHandler(dingtalk_stream.ChatbotHandler):
                     else:
                         self.reply_text(result,incoming_message)
                         return AckMessage.STATUS_OK, 'OK'
-                self.reply_text(generate_dingtalk_message(all_status),incoming_message)
+                self.reply_text(generate_dingtalk_gpu_message(all_status),incoming_message)
                 return AckMessage.STATUS_OK, 'OK'
-            case "help"|_:
+            case expression if expression in pve.pve_nodes:
+                ok, result,_ = pve.get_vm_status(expression)
+                if ok:
+                    self.reply_text(generate_message_about_single_server(result),incoming_message)
+                else:
+                    self.reply_text(result,incoming_message)
+                return AckMessage.STATUS_OK, 'OK'
+            case "help":   
                 self.reply_text("""支持命令：
-                1. 空消息：获取所有服务器GPU使用情况
-                2. help：获取帮助信息
-                """,incoming_message)
+1. 空消息：获取所有服务器GPU使用情况
+2. 服务器IP：获取指定服务器所有虚拟机信息
+3. help：获取帮助信息
+其他功能开发中🌀🌀🌀
+""",incoming_message)
                 return AckMessage.STATUS_OK, 'OK'
 
 def run_robot():
@@ -55,7 +64,10 @@ def run_robot():
     client.register_callback_handler(dingtalk_stream.chatbot.ChatbotMessage.TOPIC, CalcBotHandler(logger))
     client.start_forever()
 
-def generate_dingtalk_message(data, total_gpus_per_node=4):
+
+
+
+def generate_dingtalk_gpu_message(data, total_gpus_per_node=4):
     """
     生成适合钉钉移动客户端的GPU使用情况报告
     
@@ -115,7 +127,7 @@ def generate_dingtalk_message(data, total_gpus_per_node=4):
     message += f"💡 剩余GPU: {total_free}张\n"
     message += f"📈 GPU总使用率: {overall_usage:.1f}%\n"
     message += f"{TITLE_SEP}\n"
-    message += f"⚙️ 发送Help获取更多使用介绍"
+    message += f"⚙️ 发送help获取更多使用介绍"
     
     return message
 if __name__ == '__main__':

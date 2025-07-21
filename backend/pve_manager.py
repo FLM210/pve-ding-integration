@@ -52,7 +52,14 @@ class PVEManager:
                 print(f"连接PVE节点 {node} 失败: {str(e)}")
                 traceback.print_exc()
         return connections
-
+    def connect_pve(self,pve_name):
+        # 检查连接是否存在且有效
+        if pve_name not in self.connections or not self._is_connection_valid(self.connections[pve_name]):
+            self.logger.warning(f"PVE节点 {pve_name} 连接不存在或已失效")
+            # 尝试重新连接
+            if not self._reconnect_node(pve_name):
+                self.logger.error(f"PVE节点 {pve_name} 重新连接失败")
+                return False, f"PVE节点 {pve_name} 无法连接", 0
     def create_vm(self, node_name, vm_id, vm_name, cpu, memory, disk_size, gpu_pci_id):
         """创建带有GPU直通的虚拟机"""
         if node_name not in self.connections:
@@ -82,17 +89,17 @@ class PVEManager:
         except Exception as e:
             return False, f"创建虚拟机失败: {str(e)}"
 
+    def get_vm_status(self,pve_name):
+        self.connect_pve(self,pve_name)
+        try:
+           conn = self.connections[pve_name]
+           
+        except Exception as e:
+            self.logger.error(f"获取虚拟机状态失败: {str(e)}", exc_info=True)
+            return False, f"获取虚拟机状态失败: {str(e)}", 0
     def get_gpu_status(self, pve_name):
         """获取节点GPU使用情况（统计使用中的GPU数量）"""
-        self.logger.info(f"开始获取节点 {pve_name} 的GPU状态")
-        # 检查连接是否存在且有效
-        if pve_name not in self.connections or not self._is_connection_valid(self.connections[pve_name]):
-            self.logger.warning(f"PVE节点 {pve_name} 连接不存在或已失效")
-            # 尝试重新连接
-            if not self._reconnect_node(pve_name):
-                self.logger.error(f"PVE节点 {pve_name} 重新连接失败")
-                return False, f"PVE节点 {pve_name} 无法连接", 0
-
+        self.connect_pve(pve_name)
         try:
             conn = self.connections[pve_name]
             nodeStatus=[]
@@ -151,3 +158,6 @@ class PVEManager:
         except Exception as e:
             self.logger.error(f"获取GPU状态失败: {str(e)}", exc_info=True)
             return False, f"获取GPU状态失败: {str(e)}", 0
+
+
+
